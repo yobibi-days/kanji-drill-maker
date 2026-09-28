@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>漢字書き取りドリルメーカー</title>
+<style>
+  /* ===== 印刷設定 =====
+     @page の余白は 0 にし、実際の余白は .page の padding で作る。
+     こうしないと「297mm 幅の用紙 - @page 余白」で本文がはみ出し、
+     空白の 2 ページ目が出る不具合が起きる。 */
+  @page { size: A4 landscape; margin: 0; }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: #e9e9e9;
+    /* 本文・ふりがなは UD デジタル教科書体。未導入環境では明朝系にフォールバック */
+    font-family: "UD デジタル 教科書体 N-R", "UD Digital Kyokasho N-R", "Hiragino Mincho ProN", "Yu Mincho", "游明朝", serif;
+    display: flex; flex-direction: column; align-items: center;
+    padding: calc(20px + env(safe-area-inset-top, 0px)) 0 calc(20px + env(safe-area-inset-bottom, 0px));
+  }
+  .page {
+    width: 297mm; height: 210mm; background: #fff;
+    box-shadow: 0 0 12px rgba(0,0,0,0.15);
+    padding: 10mm 12mm;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .page-header {
+    display: flex; justify-content: space-between; align-items: baseline;
+    border-bottom: 1.5px solid #333; padding-bottom: 8px; margin-bottom: 10px;
+    /* 見出し・記入欄はゴシック系。Windows 用フォントもフォールバックに含める */
+    font-family: "BIZ UDPゴシック", "Meiryo", "メイリオ", "Yu Gothic", "游ゴシック", "Hiragino Sans", sans-serif;
+    flex-shrink: 0;
+  }
+  .page-header h1 { font-size: 24px; font-weight: 700; margin: 0; letter-spacing: 0.05em; }
+  .page-header .meta { font-size: 16px; color: #333; }
+  .page-header .meta span {
+    display: inline-block; margin-left: 24px; border-bottom: 1px solid #999;
+    padding: 0 6px 2px; min-width: 150px;
+  }
+  .page-header .meta span.name-field {
+    min-width: 260px; /* 長い名前にも対応できるよう幅広に */
+  }
+  .row {
+    flex: 1; display: flex; flex-direction: row-reverse;
+    justify-content: space-evenly; align-items: stretch; min-height: 0;
+  }
+  .mondai {
+    writing-mode: vertical-rl; text-orientation: mixed;
+    font-size: 24px; line-height: 1.9; color: #1a1a1a;
+    display: inline-block; position: relative; padding-top: 46px;
+  }
+  .mondai .num {
+    position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+    font-family: "BIZ UDPゴシック", "Meiryo", "メイリオ", "Yu Gothic", "Hiragino Sans", sans-serif;
+    font-size: 19px; color: #333;
+    writing-mode: horizontal-tb; white-space: nowrap;
+  }
+  .mondai .txt { display: inline-block; vertical-align: middle; }
+  .blank {
+    --unit: 95px; --klen: 1; --olen: 0;
+    position: relative; display: inline-block;
+    width: var(--unit); height: calc(var(--unit) * (var(--klen) + var(--olen)));
+    margin: 6px 0; border: 2px solid #333; vertical-align: middle;
+  }
+  .blank .hint {
+    position: absolute; left: 100%; top: calc(var(--unit) * var(--klen) / 2);
+    transform: translateY(-50%); margin-left: 4px; font-size: 18px; color: #555;
+    writing-mode: vertical-rl; white-space: nowrap;
+  }
+
+  /* ===== 画面専用 UI（印刷には出さない） ===== */
+  .ui { font-family: "Meiryo", "メイリオ", sans-serif; }
+  .toolbar {
+    width: 297mm; max-width: 100%; margin: 0 auto 12px;
+    background: #fff; border: 1px solid #d5d5d5; border-radius: 8px;
+    padding: 14px 16px; font-size: 13px; color: #333;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px;
+  }
+  .toolbar.dragover { border-color: #0b6bcb; background: #eef5ff; }
+  .filebtn {
+    display: inline-block; cursor: pointer;
+    background: #2f5496; color: #fff; font-weight: 700; font-size: 14px;
+    padding: 9px 20px; border-radius: 6px; white-space: nowrap;
+  }
+  .filebtn:hover { background: #24406f; }
+  .filebtn input { display: none; }
+  .tplbtn {
+    display: inline-block; cursor: pointer;
+    background: #fff; color: #2f5496; font-weight: 700; font-size: 13px;
+    padding: 8px 16px; border-radius: 6px; white-space: nowrap;
+    border: 2px solid #2f5496;
+  }
+  .tplbtn:hover { background: #eef3fb; }
+  .tplbtn:disabled { opacity: .45; cursor: default; }
+  .filename { font-size: 13px; color: #555; }
+  .filename.none { color: #999; }
+  .toolbar .note { flex-basis: 100%; font-size: 12px; color: #666; line-height: 1.7; margin: 0; }
+  .toolbar .note b { color: #b23; }
+
+  .status {
+    width: 297mm; max-width: 100%; margin: 0 auto 12px; padding: 10px 14px;
+    font-size: 13px; border-radius: 6px; line-height: 1.6;
+  }
+  .status.info { background: #e7f1ff; color: #0b4a8a; border: 1px solid #b6d4fe; }
+  .status.warn { background: #fff3cd; color: #664d03; border: 1px solid #ffe69c; }
+  .status.err  { background: #f8d7da; color: #842029; border: 1px solid #f5c2c7; }
+  .status.hidden { display: none; }
+  .screen-caption {
+    font-family: "Meiryo", "メイリオ", sans-serif; font-size: 12px; color: #666;
+    text-align: center; margin-top: 10px;
+  }
+
+  @media print {
+    body { background: #fff; padding: 0; display: block; }
+    .page { box-shadow: none; margin: 0; }
+    .toolbar, .status, .screen-caption { display: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ===================================================================
+     【使い方】
+     ===================================================================
+       1. このHTMLファイルをダブルクリックしてブラウザで開く
+       2. 問題データの Excel ファイル（.xlsx）を Excel で編集したら、
+          必ず「上書き保存」する
+       3. 画面上部の「ファイルを選択」ボタンから、その .xlsx を選ぶ
+          （枠の上にドラッグ＆ドロップでも読み込めます）
+       4. 用紙に反映されたら、ブラウザの「印刷」→「PDF として保存」
+
+     ※ インターネット接続は不要です。外部サーバーとの通信は一切行いません。
+     ※ 選んだファイルはブラウザの中だけで読み取られ、どこにも送信されません。
+     ※ 自動更新はしません。Excel を編集したら、保存して選び直してください。
+
+     【Excel ファイルの構成】（テンプレート v3 と同じ）
+       ・シート : 任意（見出し行が見つかった最初のシートを使います）
+       ・「名前：」と書いたセルの すぐ右 のセル … 名前
+       ・「日付：」と書いたセルの すぐ右 のセル … 日付
+       ・見出し行 : 「問題文（前半）」「漢字」「よみ（ふりがなヒント）」「問題文（後半）」
+       ・見出し行の次の行から 1 行 1 問。「漢字」が空の行はスキップされます。
+     =================================================================== -->
+
+<div class="ui">
+  <div class="toolbar" id="toolbar">
+    <label class="filebtn">
+      ファイルを選択
+      <input type="file" id="fileInput" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+    </label>
+    <span class="filename none" id="fileName">ファイルが選ばれていません</span>
+    <button type="button" class="tplbtn" id="tplBtn" style="display:none;">問題データのテンプレート（Excel）をダウンロード</button>
+    <p class="note">
+      問題データの Excel ファイル（<b>.xlsx</b>）を選ぶと、下の用紙に反映されます。この枠の中へドラッグ＆ドロップでも読み込めます。<br>
+      Excel で編集した場合は、<b>先に「上書き保存」してから</b>選び直してください（保存前の内容は反映されません）。<br>
+      まだ問題データをお持ちでない方は、上の「テンプレートをダウンロード」からひな形（マクロなしの通常の .xlsx）を保存できます。
+    </p>
+  </div>
+  <div id="status" class="status hidden"></div>
+</div>
+
+<div>
+  <div class="page">
+    <div class="page-header">
+      <h1>漢字書き取りドリル</h1>
+      <div class="meta">
+        名前：<span class="name-field" id="nameField">&nbsp;</span>
+        日付：<span id="dateField">&nbsp;</span>
+        点数：<span>&nbsp;</span>
+      </div>
+    </div>
+    <div class="row" id="row"></div>
+  </div>
+</div>
+<div class="screen-caption">漢字書き取りドリルメーカー（A4横・1段組・先頭7問）</div>
+<div class="screen-caption" style="margin-top:2px;">© 2026 ヨビビ｜ご家庭・学校での利用はご自由にどうぞ。改変して自分の作品として配布するのはご遠慮ください。</div>
+
+<script>
+"use strict";
+
+/* 動作確認用サンプル（参考レイアウト kanji_drill_layout_FINAL.html と同じ7問）。
+   ファイルを選ぶ前の初期表示として使用する。 */
+/* 配布用 Excel テンプレート（base64 埋め込み。ダウンロードボタン用） */
+const TEMPLATE_XLSX_B64 = "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";
+const TEMPLATE_XLSX_NAME = "漢字ドリル_問題データ_配布用テンプレート.xlsx";
+
+const SAMPLE_PROBLEMS = [
+  { before: "百メートル", kanji: "競争", hint: "きょうそう", after: "。" },
+  { before: "",           kanji: "初",   hint: "はじ",       after: "めて行く場所。" },
+  { before: "白組の",     kanji: "旗",   hint: "はた",       after: "を振る。" },
+  { before: "三月の",     kanji: "半",   hint: "なか",       after: "ばごろ。" },
+  { before: "にっこり",   kanji: "笑",   hint: "わら",       after: "う。" },
+  { before: "魚の",       kanji: "大群", hint: "たいぐん",   after: "が泳ぐ。" },
+  { before: "",           kanji: "軍部", hint: "ぐんぶ",     after: "の学校に通う。" }
+];
+
+/* ---- ユーティリティ ---- */
+function esc(s) {
+  return String(s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function circled(n) {
+  return (n >= 1 && n <= 20) ? String.fromCodePoint(0x2460 + n - 1) : "(" + n + ")";
+}
+function setStatus(type, html) {
+  const el = document.getElementById("status");
+  if (!type) { el.className = "status hidden"; el.innerHTML = ""; return; }
+  el.className = "status " + type;
+  el.innerHTML = html;
+}
+
+/* ===================================================================
+   .xlsx リーダー（外部ライブラリ不使用）
+
+   .xlsx の実体は「ZIP でまとめられた複数の XML」。
+   そこで
+     ・ZIP の展開 … ブラウザ標準の DecompressionStream("deflate-raw")
+     ・XML の解析 … ブラウザ標準の DOMParser
+   だけで読む。これにより HTML 1 ファイルで完結し、file:// でダブルクリック
+   して開いた状態でも、インターネット接続なしで動作する。
+
+   対応範囲は本ツールに必要な部分に絞っている
+   （非対応：パスワード保護された xlsx / ZIP64 / 旧 .xls 形式）。
+   =================================================================== */
+
+const NS_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+/* XML 文字列 → Document。名前空間の接頭辞（x: など）が付いていても拾えるよう、
+   要素の取得は必ず getElementsByTagNameNS("*", 名前) を使う。 */
+function xmlDoc(text) {
+  const doc = new DOMParser().parseFromString(text, "application/xml");
+  if (doc.getElementsByTagName("parsererror").length) {
+    throw new Error("Excel ファイル内の XML を解析できませんでした。");
+  }
+  return doc;
+}
+function tags(el, name) {
+  return Array.from(el.getElementsByTagNameNS("*", name));
+}
+
+/* ---- 最小限の ZIP リーダー ---- */
+async function openZip(buf) {
+  const u8 = new Uint8Array(buf);
+  const dv = new DataView(buf);
+
+  // EOCD（End Of Central Directory）を末尾から探す。コメント長は最大 65535。
+  let eocd = -1;
+  const stop = Math.max(0, u8.length - 22 - 65535);
+  for (let i = u8.length - 22; i >= stop; i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) {
+    throw new Error("ZIP 構造が見つかりません。.xlsx ファイルではない可能性があります。");
+  }
+
+  const count = dv.getUint16(eocd + 10, true);
+  const cdOff = dv.getUint32(eocd + 16, true);
+  if (cdOff === 0xffffffff || count === 0xffff) {
+    throw new Error("ZIP64 形式の Excel ファイルには対応していません。");
+  }
+
+  const dec = new TextDecoder("utf-8");
+  const entries = new Map();
+  let p = cdOff;
+  for (let i = 0; i < count; i++) {
+    if (p + 46 > u8.length || dv.getUint32(p, true) !== 0x02014b50) break;
+    const method = dv.getUint16(p + 10, true);
+    const csize  = dv.getUint32(p + 20, true);
+    const nlen   = dv.getUint16(p + 28, true);
+    const elen   = dv.getUint16(p + 30, true);
+    const clen   = dv.getUint16(p + 32, true);
+    const lhOff  = dv.getUint32(p + 42, true);
+    const name   = dec.decode(u8.subarray(p + 46, p + 46 + nlen));
+    if (csize !== 0xffffffff && lhOff !== 0xffffffff) {
+      entries.set(name, { method, csize, lhOff });
+    }
+    p += 46 + nlen + elen + clen;
+  }
+
+  async function read(name) {
+    const e = entries.get(name);
+    if (!e) return null;
+    if (dv.getUint32(e.lhOff, true) !== 0x04034b50) {
+      throw new Error("ZIP のローカルヘッダーが壊れています。");
+    }
+    // ローカルヘッダーのファイル名長・拡張領域長を読み飛ばした位置が実データの先頭
+    const nlen = dv.getUint16(e.lhOff + 26, true);
+    const elen = dv.getUint16(e.lhOff + 28, true);
+    const start = e.lhOff + 30 + nlen + elen;
+    const raw = u8.subarray(start, start + e.csize);
+    if (e.method === 0) return dec.decode(raw);               // 無圧縮
+    if (e.method !== 8) {
+      throw new Error("未対応の圧縮方式です（method=" + e.method + "）。");
+    }
+    if (typeof DecompressionStream === "undefined") {
+      throw new Error("お使いのブラウザが古いため展開できません。Microsoft Edge か Google Chrome の最新版でお試しください。");
+    }
+    const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    return await new Response(stream).text();
+  }
+
+  return { read, has: (n) => entries.has(n), names: () => Array.from(entries.keys()) };
+}
+
+/* ---- 共有文字列（sharedStrings.xml） ----
+   日本語版 Excel は <rPh> に「ふりがな」を自動で持たせる。これを拾うと
+   「競争キョウソウ」のように連結されてしまうため、必ず除外する。 */
+function textOf(el) {
+  let s = "";
+  for (const t of tags(el, "t")) {
+    if (t.parentNode && t.parentNode.localName === "rPh") continue;
+    s += t.textContent;
+  }
+  return s;
+}
+function readSharedStrings(doc) {
+  if (!doc) return [];
+  return tags(doc.documentElement, "si").map(textOf);
+}
+
+/* ---- セル書式（styles.xml）：そのセルが「日付」かどうかだけを判定する ----
+   Excel は日付を「1900/1/1 を 1 とする通し番号」で保持するため、書式を見ずに
+   読むとヘッダーに「46283」のような数値が印字されてしまう。 */
+const BUILTIN_DATE_FMT = new Set([14,15,16,17,18,19,20,21,22,27,28,29,30,31,32,33,34,35,36,45,46,47,50,51,52,53,54,55,56,57,58]);
+function looksLikeDateFormat(code) {
+  if (!code || /^general$/i.test(code.trim())) return false;
+  // 色指定 [Red]、文字列リテラル "円"、エスケープ \- を取り除いてから判定する
+  const c = code.replace(/\[[^\]]*\]/g, "").replace(/"[^"]*"/g, "").replace(/\\./g, "");
+  return /[ymdhs]/i.test(c);
+}
+function readDateStyles(doc) {
+  const isDate = [];
+  if (!doc) return isDate;
+  const custom = new Map();
+  for (const nf of tags(doc.documentElement, "numFmt")) {
+    custom.set(Number(nf.getAttribute("numFmtId")), nf.getAttribute("formatCode") || "");
+  }
+  const cellXfs = tags(doc.documentElement, "cellXfs")[0];
+  if (!cellXfs) return isDate;
+  Array.from(cellXfs.children).forEach((xf, i) => {
+    const id = Number(xf.getAttribute("numFmtId") || 0);
+    isDate[i] = custom.has(id) ? looksLikeDateFormat(custom.get(id)) : BUILTIN_DATE_FMT.has(id);
+  });
+  return isDate;
+}
+
+/* ---- 日付の通し番号 → 表示用の文字列 ---- */
+function formatExcelDate(serial, date1904) {
+  let days = Math.floor(serial);
+  const frac = serial - days;
+  let base;
+  if (date1904) {
+    base = Date.UTC(1904, 0, 1);
+  } else {
+    base = Date.UTC(1899, 11, 31);
+    if (days > 59) days -= 1;  // 1900/2/29（実在しない日）の分を戻す Excel 互換処理
+  }
+  const d = new Date(base + days * 86400000 + Math.round(frac * 86400) * 1000);
+  if (serial < 1) {  // 時刻だけの書式
+    return String(d.getUTCHours()).padStart(2, "0") + ":" + String(d.getUTCMinutes()).padStart(2, "0");
+  }
+  return d.getUTCFullYear() + "年" + (d.getUTCMonth() + 1) + "月" + d.getUTCDate() + "日";
+}
+
+/* ---- セル 1 個 → 文字列 ---- */
+function cellText(c, shared, dateStyles, date1904) {
+  const t = c.getAttribute("t") || "n";
+  if (t === "inlineStr") {
+    const is = tags(c, "is")[0];
+    return is ? textOf(is) : "";
+  }
+  const v = tags(c, "v")[0];
+  if (!v) return "";
+  const raw = v.textContent;
+  if (t === "s") { const s = shared[Number(raw)]; return s == null ? "" : s; }
+  if (t === "str") return raw;
+  if (t === "b") return raw === "1" ? "TRUE" : "FALSE";
+  if (t === "e") return "";
+  const num = Number(raw);
+  if (!Number.isFinite(num)) return raw;
+  const si = Number(c.getAttribute("s") || 0);
+  if (dateStyles[si] && num > 0) return formatExcelDate(num, date1904);
+  return String(num);
+}
+
+/* ---- シート → 2 次元配列 ----
+   【重要】xlsx は空の行・セルを XML ごと省略する（テンプレート v3 では 4 行目が
+   まるごと存在しない）。順番に詰めて配列化すると列がずれ、「名前」と「日付」が
+   入れ替わるなどの不具合になるため、必ず r="B3" の座標どおりに配置する。 */
+function columnIndex(ref) {
+  let n = 0;
+  for (let i = 0; i < ref.length; i++) {
+    const c = ref.charCodeAt(i);
+    if (c >= 65 && c <= 90) n = n * 26 + (c - 64);
+    else if (c >= 97 && c <= 122) n = n * 26 + (c - 96);
+    else break;
+  }
+  return n - 1;
+}
+function readSheetRows(doc, shared, dateStyles, date1904) {
+  const rows = [];
+  let nextRow = 0;
+  for (const row of tags(doc.documentElement, "row")) {
+    const r = Number(row.getAttribute("r"));
+    const ri = (Number.isFinite(r) && r > 0) ? r - 1 : nextRow;
+    nextRow = ri + 1;
+    const arr = rows[ri] || (rows[ri] = []);
+    let nextCol = 0;
+    for (const c of tags(row, "c")) {
+      const ref = c.getAttribute("r");
+      const ci = ref ? columnIndex(ref) : nextCol;
+      if (ci < 0) continue;
+      nextCol = ci + 1;
+      arr[ci] = cellText(c, shared, dateStyles, date1904);
+    }
+  }
+  // 省略された行・セルを空文字で埋め、CSV 版と同じ「隙間のない 2 次元配列」にする
+  for (let i = 0; i < rows.length; i++) {
+    if (!rows[i]) { rows[i] = []; continue; }
+    for (let j = 0; j < rows[i].length; j++) {
+      if (rows[i][j] == null) rows[i][j] = "";
+    }
+  }
+  return rows;
+}
+
+/* ---- ブック全体を読み、シートごとの 2 次元配列を返す ---- */
+async function readWorkbook(buf) {
+  const zip = await openZip(buf);
+
+  const wbText = await zip.read("xl/workbook.xml");
+  if (!wbText) {
+    throw new Error("xl/workbook.xml が見つかりません。Excel ファイル（.xlsx）か確認してください。");
+  }
+  const wb = xmlDoc(wbText);
+  const wbPr = tags(wb.documentElement, "workbookPr")[0];
+  const date1904 = /^(1|true)$/i.test((wbPr && wbPr.getAttribute("date1904")) || "");
+
+  const ssText = await zip.read("xl/sharedStrings.xml");
+  const shared = readSharedStrings(ssText ? xmlDoc(ssText) : null);
+  const stText = await zip.read("xl/styles.xml");
+  const dateStyles = readDateStyles(stText ? xmlDoc(stText) : null);
+
+  // シートの並び順と実ファイルの対応は workbook.xml.rels が持っている
+  const relsText = await zip.read("xl/_rels/workbook.xml.rels");
+  const rels = new Map();
+  if (relsText) {
+    for (const r of tags(xmlDoc(relsText).documentElement, "Relationship")) {
+      rels.set(r.getAttribute("Id"), r.getAttribute("Target") || "");
+    }
+  }
+  let sheets = tags(wb.documentElement, "sheet").map((s) => {
+    const rid = s.getAttributeNS(NS_REL, "id") || s.getAttribute("r:id") || "";
+    const target = rels.get(rid) || "";
+    const path = target.startsWith("/") ? target.slice(1) : "xl/" + target.replace(/^\.\//, "");
+    return { name: s.getAttribute("name") || "", path };
+  }).filter((s) => zip.has(s.path));
+
+  // rels が壊れている場合の保険：worksheets 配下を直接拾う
+  if (sheets.length === 0) {
+    sheets = zip.names()
+      .filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n))
+      .sort()
+      .map((n) => ({ name: n, path: n }));
+  }
+  if (sheets.length === 0) throw new Error("シートが 1 枚も見つかりませんでした。");
+
+  const out = [];
+  for (const s of sheets) {
+    const text = await zip.read(s.path);
+    if (!text) continue;
+    out.push({ name: s.name, rows: readSheetRows(xmlDoc(text), shared, dateStyles, date1904) });
+  }
+  return out;
+}
+
+/* ---- シート構造の解釈（見出し行を文字列で自動検出） ----
+   列の位置ではなくラベル文字列で探すため、テンプレートの列を多少ずらしても動く。 */
+function parseSheet(rows) {
+  const cell = (r, i) => (r && r[i] != null ? String(r[i]) : "");
+
+  // 名前・日付：「名前」「日付」ラベルセルを探し、その右隣の値を採用
+  let name = "", date = "";
+  for (const r of rows) {
+    if (!r) continue;
+    for (let i = 0; i < r.length; i++) {
+      const v = cell(r, i).trim();
+      if (!name && v.startsWith("名前")) name = cell(r, i + 1).trim();
+      if (!date && v.startsWith("日付")) date = cell(r, i + 1).trim();
+    }
+  }
+
+  // 見出し行：「前半」を含むセルがあり、かつ中身がちょうど「漢字」のセルがある行
+  // （「漢字」を完全一致にしているのは、入力ルールの説明文セルを誤検出しないため）
+  let hIdx = -1, col = {};
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r] || [];
+    const idxBefore = row.findIndex(c => String(c || "").includes("前半"));
+    const idxKanji  = row.findIndex(c => String(c || "").trim() === "漢字");
+    if (idxBefore !== -1 && idxKanji !== -1) {
+      hIdx = r;
+      col.before = idxBefore;
+      col.kanji  = idxKanji;
+      col.hint   = row.findIndex(c => { const s = String(c || ""); return s.includes("よみ") || s.includes("ふりがな"); });
+      col.after  = row.findIndex(c => String(c || "").includes("後半"));
+      break;
+    }
+  }
+  if (hIdx === -1) {
+    throw new Error("見出し行（「問題文（前半）」と「漢字」）が見つかりませんでした。テンプレートの列名をご確認ください。");
+  }
+
+  const problems = [];
+  const skipped = [];
+  for (let r = hIdx + 1; r < rows.length; r++) {
+    const row = rows[r] || [];
+    const kanji  = (col.kanji  >= 0 ? cell(row, col.kanji)  : "").trim();
+    const hint   = (col.hint   >= 0 ? cell(row, col.hint)   : "").trim();
+    const before = (col.before >= 0 ? cell(row, col.before) : "").trim();
+    const after  = (col.after  >= 0 ? cell(row, col.after)  : "").trim();
+    if (!kanji && !hint && !before && !after) continue;      // 完全な空行はスキップ
+    if (!kanji) { skipped.push(r + 1); continue; }           // 漢字が無い行は枠を作れないためスキップ
+    problems.push({ before, kanji, hint, after });
+  }
+  return { name, date, problems, skipped };
+}
+
+/* ---- 描画 ---- */
+function problemHTML(p, n) {
+  const klen = Array.from(p.kanji).length || 1;   // 漢字の文字数＝枠の高さ（答えの漢字自体は印刷しない）
+  const beforeSpan = p.before ? `<span class="txt">${esc(p.before)}</span>` : "";
+  const afterSpan  = p.after  ? `<span class="txt">${esc(p.after)}</span>`  : "";
+  const hintSpan   = p.hint   ? `<span class="hint">${esc(p.hint)}</span>`  : "";
+  return `<div class="mondai"><span class="num">${circled(n)}</span>`
+       + `${beforeSpan}`
+       + `<span class="blank" style="--klen:${klen}; --olen:0;">${hintSpan}</span>`
+       + `${afterSpan}</div>`;
+}
+function render(data) {
+  document.getElementById("nameField").innerHTML = data.name ? esc(data.name) : "&nbsp;";
+  document.getElementById("dateField").innerHTML = data.date ? esc(data.date) : "&nbsp;";
+  // 先頭7問のみ使用。7問未満は残りを描画せず余白にする（詰めない）
+  const shown = data.problems.slice(0, 7);
+  document.getElementById("row").innerHTML = shown.map((p, i) => problemHTML(p, i + 1)).join("");
+  return shown.length;
+}
+
+/* ---- ファイル選択 ---- */
+function setFileName(text, isNone) {
+  const el = document.getElementById("fileName");
+  el.textContent = text;
+  el.className = "filename" + (isNone ? " none" : "");
+}
+
+async function loadFile(file) {
+  if (!file) return;
+  setFileName(file.name, false);
+
+  if (/\.xls$/i.test(file.name)) {
+    setStatus("err", "<b>旧形式の .xls には対応していません。</b> Excel で「名前を付けて保存」→ ファイルの種類を「Excel ブック (*.xlsx)」にして保存し直してから、もう一度お選びください。");
+    return;
+  }
+  if (!/\.xlsx$/i.test(file.name)) {
+    setStatus("warn", "拡張子が .xlsx ではありません（" + esc(file.name) + "）。このまま読み込みを試みます。");
+  } else {
+    setStatus("info", "読み込み中です…");
+  }
+
+  try {
+    const sheets = await readWorkbook(await file.arrayBuffer());
+
+    // 見出し行が見つかった最初のシートを採用する（シートが複数あってもよい）
+    let data = null, usedSheet = "", lastErr = null;
+    for (const s of sheets) {
+      try { data = parseSheet(s.rows); usedSheet = s.name; break; }
+      catch (e) { lastErr = e; }
+    }
+    if (!data) throw lastErr || new Error("読み取れるシートがありませんでした。");
+
+    const count = render(data);
+    const sheetNote = sheets.length > 1 ? `シート「${esc(usedSheet)}」から ` : "";
+    if (data.problems.length === 0) {
+      setStatus("warn", sheetNote + "データは読み込めましたが、有効な問題が見つかりませんでした（「漢字」列が空の行はスキップされます）。");
+    } else {
+      let msg = `${sheetNote}読み込み成功：${data.problems.length}問（うち先頭${count}問を表示）。`;
+      if (data.skipped.length) msg += ` ※「漢字」列が空のため ${data.skipped.length} 行をスキップしました。`;
+      setStatus("info", msg + " この案内は印刷には出ません。");
+    }
+  } catch (e) {
+    setStatus("err",
+      "<b>Excel ファイルを読み込めませんでした：</b>" + esc(e.message) + "<br>"
+      + "・ファイルが <code>.xlsx</code> 形式か、パスワード保護されていないかをご確認ください。<br>"
+      + "・Excel で開いたままの場合は、<b>上書き保存</b>してからもう一度お試しください。<br>"
+      + "用紙の表示は、直前の状態のままになっています。");
+  }
+}
+
+/* ---- テンプレートのダウンロードボタン（通常のブラウザ用） ---- */
+function initTemplateDownload() {
+  const btn = document.getElementById("tplBtn");
+  if (!btn) return;
+  btn.style.display = "";
+  btn.addEventListener("click", () => {
+    try {
+      const bin = atob(TEMPLATE_XLSX_B64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const blob = new Blob([bytes], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = TEMPLATE_XLSX_NAME;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      alert("ダウンロードできませんでした。お手数ですが、ブラウザを更新してもう一度お試しください。");
+    }
+  });
+}
+
+/* ---- 起動 ---- */
+function main() {
+  render({ name: "", date: "", problems: SAMPLE_PROBLEMS });
+  setStatus("info",
+    "<b>サンプル表示中です。</b> 上の「ファイルを選択」から問題データの Excel ファイル（.xlsx）を選ぶと、"
+    + "実際の問題データが表示されます。インターネット接続は不要で、選んだファイルはこのブラウザの中だけで読み取られます。");
+
+  initTemplateDownload();
+
+  document.getElementById("fileInput").addEventListener("change", (ev) => {
+    loadFile(ev.target.files && ev.target.files[0]);
+    ev.target.value = "";   // 同じファイルを続けて選び直せるようにする
+  });
+
+  // ドラッグ＆ドロップでも読み込めるようにする
+  const bar = document.getElementById("toolbar");
+  const on = (t, fn) => bar.addEventListener(t, fn);
+  on("dragover", (e) => { e.preventDefault(); bar.classList.add("dragover"); });
+  on("dragleave", () => bar.classList.remove("dragover"));
+  on("drop", (e) => {
+    e.preventDefault();
+    bar.classList.remove("dragover");
+    loadFile(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]);
+  });
+}
+
+document.addEventListener("DOMContentLoaded", main);
+</script>
+</body>
+</html>
